@@ -3,6 +3,7 @@ import express from 'express';
 import mysql2 from 'mysql2/promise';
 import bcrypt from 'bcrypt';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import jsonwebtoken from 'jsonwebtoken';
 
 const jwt = jsonwebtoken;
@@ -16,6 +17,7 @@ const corsOps = {
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOps));
+app.use(cookieParser());
 
 //Database driver setup
 const pool = mysql2.createPool({
@@ -54,7 +56,7 @@ app.get("/",(req,res) => {
 	res.sendFile(import.meta.dirname+"\\templates\\signinup.html");
 });
 
-//Route checking database
+//Route for checking database
 app.get("/see", async (req,res) => {
 
     const connection = await pool.getConnection();
@@ -73,7 +75,7 @@ app.post("/register", async (req,res) => {
 	const hashedpass = await bcrypt.hash(password,10);
 
 	const connection = await pool.getConnection();
-    await connection.execute(
+  await connection.execute(
       'INSERT INTO reg_users (username,password) VALUES (?,?)', [username,hashedpass]
     );
     connection.release();
@@ -82,6 +84,7 @@ app.post("/register", async (req,res) => {
 
 //Sign in route
 app.post('/login', async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
   const { username, password } = req.body;
 
   try {
@@ -104,19 +107,33 @@ app.post('/login', async (req, res) => {
     if (passwordMatch) {
       //Generate JWT
     	const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
-  		res.cookie('jwt', token, { httpOnly: true, secure: true });
+      //Ask Sohaib Bhai
+  		res.cookie('jwt', token, { httpOnly: true, secure: true, path: '/', sameSite: 'lax' });
   		res.status(201).json({ redirect: "/products"});
     } else {
-      res.status(401).json({ message: "Invalid credentials"});
+      res.status(401).json({ message: "Invalid credentials" });
     }
   } catch (error) {
     console.error('Database error:', error);
-    res.status(500).json({ message: "Internal server error"});
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
+// JWT verification middleware
+function authenticateToken(req, res, next) {
+  const token = req.cookies.jwt;
+
+  if (token == null) return res.sendStatus(401); // No token
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403); // Invalid token
+    req.user = user;
+    next(); // Pass the user to the next middleware or route handler
+  });
+}
+
 //Redirect route
-app.get("/products",(req,res) => {
+app.get("/products",authenticateToken,(req,res) => {
 	res.sendFile(import.meta.dirname+"\\templates\\products.html");
 });
 
