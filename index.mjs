@@ -26,8 +26,8 @@ const pool = mysql2.createPool({
 	password:process.env.PASSQL,
 	database: 'auth',
 	waitForConnections: true,
-  	connectionLimit: 10,
-  	queueLimit: 0
+  connectionLimit: 10,
+  queueLimit: 0
 });
 
 //DB connection
@@ -82,7 +82,7 @@ app.post("/register", async (req,res) => {
     res.status(201).json({message:"Registered sucessfully."});
 });
 
-//Sign in route
+//Clients Sign in route
 app.post('/login', async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   const { username, password } = req.body;
@@ -106,8 +106,7 @@ app.post('/login', async (req, res) => {
 
     if (passwordMatch) {
       //Generate JWT
-    	const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET, { expiresIn: '1h' });
-      //Ask Sohaib Bhai
+    	const token = jwt.sign({ username: user.username, role: 'client' }, process.env.JWT_SECRET, { expiresIn: '1h' });
   		res.cookie('jwt', token, { httpOnly: true, secure: true, path: '/', sameSite: 'lax' });
   		res.status(201).json({ redirect: "/products"});
     } else {
@@ -119,23 +118,116 @@ app.post('/login', async (req, res) => {
   }
 });
 
+app.post("/adminlogin", async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  const { username, password } = req.body;
+
+  try {
+    const connection = await pool.getConnection();
+    const [rows] = await connection.execute(
+      'SELECT * FROM reg_users WHERE username = ?',
+      [username]
+    );
+    connection.release();
+
+    if (rows.length === 0) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
+
+    const user = rows[0];
+    const hashedPasswordFromDB = user.password;
+
+    const passwordMatch = await bcrypt.compare(password, hashedPasswordFromDB);
+
+    if (passwordMatch) {
+      //Generate JWT
+    	const token = jwt.sign({ username: user.username, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  		res.cookie('jwt', token, { httpOnly: true, secure: true, path: '/api', sameSite: 'lax' });
+  		res.status(201).json({ message: "Admin granted access" });
+    } else {
+      res.status(401).json({ message: "Invalid credentials" });
+    }
+  } catch (error) {
+    console.error('Database error:', error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // JWT verification middleware
-function authenticateToken(req, res, next) {
-  const token = req.cookies.jwt;
+function authenticateToken(roles = []) {
+  return (req, res, next) => {
+    console.log("Authentication middleware started");
+    const token = req.cookies.jwt;
+    console.log("Token: ",token);
 
-  if (token == null) return res.sendStatus(401); // No token
+    if (token == null) return res.sendStatus(401); // No token
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403); // Invalid token
-    req.user = user;
-    next(); // Pass the user to the next middleware or route handler
-  });
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+      if (err) return res.sendStatus(403); // Invalid token
+      req.user = user;
+      if (roles.length > 0 && !roles.includes(req.user.role)) {
+        console.log('Role mismatch:', req.user.role, 'not in', roles);
+        return res.sendStatus(403); // Forbidden due to role mismatch
+      }
+      next(); // Pass the user to the next middleware or route handler
+    });
+  };
 }
 
 //Redirect route
-app.get("/products",authenticateToken,(req,res) => {
+app.get("/products",authenticateToken(['client','admin']),(req,res) => {
 	res.sendFile(import.meta.dirname+"\\templates\\products.html");
 });
+
+//Admin routes below
+app.get("/api/seeProducts",authenticateToken(['admin']), async (req,res) => {
+  
+  const connection = await pool.getConnection();
+  const [rows] = await connection.execute(
+    'SELECT * FROM products'
+  );
+  connection.release();
+  res.json(rows);
+});
+
+app.post("/api/addProducts",authenticateToken(['admin']), async (req,res) => {
+  
+  const { name, price } = req.body;
+
+  const connection = await pool.getConnection();
+  await connection.execute(
+      'INSERT INTO products (name,price) VALUES (?,?)', [name,price]
+    );
+    connection.release();
+    res.status(201).json({message:"Product added sucessfully."});
+});
+
+app.put("/api/chngProduct/:id",authenticateToken(['admin']), async (req,res) => {
+  const id = req.params.id;
+  const { name, price } = req.body;
+
+  const connection = await pool.getConnection();
+  await connection.execute(
+      'UPDATE products SET name = ?, price = ? WHERE id = ?', [name,price,id]
+    );
+    connection.release();
+    res.status(201).json({message:"Product changed sucessfully."});
+});
+
+app.delete("/api/delProduct/:id",authenticateToken(['admin']), async (req,res) => {
+
+  const id = req.params.id;
+  
+  const connection = await pool.getConnection();
+  const [rows] = await connection.execute(
+    'DELETE FROM products WHERE id = ?', [id]
+  );
+  connection.release();
+  res.status(201).json({message:"Product deleted sucessfully."});
+
+});
+
+
 
 const port = process.env.PORT;
 
