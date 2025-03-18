@@ -23,7 +23,7 @@ app.use(cookieParser());
 const pool = mysql2.createPool({
 	host:'localhost',
 	user:'root',
-	password:process.env.PASSQL,
+	password:'',//process.env.PASSQL,
 	database: 'auth',
 	waitForConnections: true,
   connectionLimit: 10,
